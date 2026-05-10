@@ -14,3 +14,9 @@ wheels/
 .DS_Store
 scratch/
 .pytest_cache/
+
+# Project meta-files (ignored for clean repo)
+PLAN.md
+PROJECT_STATUS.md
+TODO.md
+GenAI_SampleConversations/
