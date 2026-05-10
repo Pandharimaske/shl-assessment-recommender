@@ -1,35 +1,36 @@
 """
-Embedder — local sentence-transformers model (all-MiniLM-L6-v2).
-No network call per request. Model loaded once at startup, offloaded to
-thread executor so the async event loop is never blocked.
+Embedder — fastembed (ONNX-based, no PyTorch).
+Uses all-MiniLM-L6-v2 via fastembed: ~80 MB RAM vs ~400 MB for sentence-transformers+torch.
+Model is baked into the Docker image at build time for zero cold-start download latency.
+Async queries offload to thread executor so the event loop is never blocked.
 """
 import asyncio
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
 _MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-_model: SentenceTransformer | None = None
+_model: TextEmbedding | None = None
 
 
-def _get_model() -> SentenceTransformer:
+def _get_model() -> TextEmbedding:
     global _model
     if _model is None:
-        _model = SentenceTransformer(_MODEL_NAME)
+        _model = TextEmbedding(model_name=_MODEL_NAME)
     return _model
 
 
 def preload_model() -> None:
-    """Call at startup to avoid cold-start latency on the first request."""
+    """Call at startup (in executor) to warm the model before first request."""
     _get_model()
-    print(f"Embedding model '{_MODEL_NAME}' loaded.")
+    print(f"fastembed model '{_MODEL_NAME}' loaded.")
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts (CPU-bound, synchronous)."""
+    """Embed a batch of texts. Returns list of float vectors."""
     if not texts:
         return []
     model = _get_model()
-    embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
-    return embeddings.tolist()
+    embeddings = list(model.embed(texts))
+    return [e.tolist() for e in embeddings]
 
 
 def embed_query(text: str) -> list[float]:
@@ -38,7 +39,7 @@ def embed_query(text: str) -> list[float]:
 
 
 async def aembed_query(text: str) -> list[float]:
-    """Async embed — offloads CPU work to executor so event loop stays free."""
+    """Async embed — offloads to executor so the event loop stays unblocked."""
     if not text:
         return []
     loop = asyncio.get_event_loop()
@@ -47,7 +48,7 @@ async def aembed_query(text: str) -> list[float]:
 
 def build_catalog_text(item: dict) -> str:
     """
-    Create a rich text representation of a catalog item for embedding.
+    Rich text representation of a catalog item for embedding.
     Combines name + description + job_levels + keys.
     """
     parts = [item["name"]]
