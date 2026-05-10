@@ -21,11 +21,7 @@ COPY scripts/ ./scripts/
 
 # Pre-download the embedding model into the image at build time.
 # This means zero model-download latency on cold start.
-RUN python -c "
-from sentence_transformers import SentenceTransformer
-SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-print('Model cached.')
-"
+RUN uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); print('Model cached.')"
 
 # Expose port
 EXPOSE 8000
