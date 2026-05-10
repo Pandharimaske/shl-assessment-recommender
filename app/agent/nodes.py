@@ -25,7 +25,6 @@ from app.agent.prompts import (
     RERANK_PROMPT,
     COMPARE_PROMPT,
     REFUSE_PROMPT,
-    HYDE_PROMPT,
     SENIORITY_TO_JOB_LEVEL,
 )
 from app.retriever.embedder import aembed_query
@@ -47,7 +46,7 @@ def _get_llm() -> BaseChatModel:
             api_key=s.groq_api_key,
             model=s.groq_model,
             temperature=0.2,
-            max_tokens=1024,
+            max_tokens=2048,   # rerank needs up to 10 URLs + explanation
             max_retries=0,
         )
         
@@ -59,7 +58,8 @@ def _get_llm() -> BaseChatModel:
         if s.openrouter_api_key:
             fallbacks.append(ChatOpenAI(api_key=s.openrouter_api_key, base_url="https://openrouter.ai/api/v1", model=s.openrouter_model, temperature=0.2, max_retries=0))
             for backup in ["google/gemma-4-31b-it:free", "qwen/qwen3-next-80b-a3b-instruct:free"]:
-                fallbacks.append(ChatOpenAI(api_key=s.openrouter_api_key, base_url="https://openrouter.ai/api/v1", model=backup, temperature=0.2, max_retries=0))
+                # last-resort fallbacks get 1 retry to handle transient 503s
+                fallbacks.append(ChatOpenAI(api_key=s.openrouter_api_key, base_url="https://openrouter.ai/api/v1", model=backup, temperature=0.2, max_retries=1))
 
         _llm = primary_llm.with_fallbacks(fallbacks) if fallbacks else primary_llm
     return _llm
@@ -72,7 +72,7 @@ def _get_small_llm() -> BaseChatModel:
             api_key=s.groq_api_key,
             model=s.groq_small_model,
             temperature=0.2,
-            max_tokens=1024,
+            max_tokens=512,    # clarify/refuse only need short outputs
             max_retries=0,
         )
         
@@ -258,15 +258,9 @@ async def supervisor_node(state: AgentState) -> AgentState:
         AnalyzeOutput
     )
     
-    # Hydrate HyDE if ready
+    # Hydrate HyDE: now generated inline by the LLM in AnalyzeOutput.
+    # If it came back null (e.g. no job_role yet), leave it null — retrieve_node will skip it.
     ctx = analysis.model_dump()
-    if (ctx["ready_to_recommend"] or ctx["jd_provided"]) and not ctx["hyde_description"]:
-        context_sum = _context_summary(ctx)
-        ctx["hyde_description"] = await _acall_llm(
-            "You are an SHL product expert.", 
-            HYDE_PROMPT.format(context_summary=context_sum)
-        )
-    
     state["conversation_context"] = ctx
     verdict = ctx["verdict"].upper()
 
@@ -319,77 +313,78 @@ async def clarify_node(state: AgentState) -> AgentState:
 
 async def retrieve_node(state: AgentState) -> AgentState:
     """
-    Build structured query and HyDE description → Hybrid search with RRF (Parallelized).
+    Build structured query + use HyDE from supervisor context → Hybrid search with RRF (Parallelized).
+    top_k=30 per Pinecone leg for larger fusion pool; BM25 k=20 for equal weight.
     """
     import asyncio
     from app.retriever.bm25_retriever import query_bm25
     from app.retriever.fusion import reciprocal_rank_fusion
-    from app.agent.prompts import HYDE_PROMPT
     from app.retriever.embedder import aembed_query
 
     ctx = state.get("conversation_context")
     if not ctx:
-        # Fallback to ensure we have context even if supervisor is skipped (unlikely)
-        from app.agent.nodes import supervisor_node
         state = await supervisor_node(state)
         ctx = state["conversation_context"]
 
     # Build structured query
     query_str = _build_search_query(ctx)
     
-    # 1. HyDE: Use pre-generated description from context if available
-    hyde_desc = ctx.get("hyde_description")
-    if not hyde_desc:
-        context_sum = _context_summary(ctx)
-        try:
-            hyde_desc = await _acall_llm("You are an SHL product expert.", 
-                                         HYDE_PROMPT.format(context_summary=context_sum))
-        except Exception as e:
-            print(f"DEBUG: HyDE generation failed, falling back to query string: {e}")
-            hyde_desc = query_str
+    # HyDE description generated inline by supervisor — use directly, no extra LLM call
+    hyde_desc = ctx.get("hyde_description") or query_str
 
-    # 2. Embedding for both query and HyDE
-    q_vec_task = aembed_query(query_str)
-    hyde_vec_task = aembed_query(hyde_desc)
+    # 1. Embed both query and HyDE in parallel
+    q_vector, hyde_vector = await asyncio.gather(
+        aembed_query(query_str),
+        aembed_query(hyde_desc),
+    )
     
-    q_vector, hyde_vector = await asyncio.gather(q_vec_task, hyde_vec_task)
-    
-    # 3. Metadata filter
+    # 2. Metadata filter by seniority
     pinecone_filter = None
     if ctx["seniority"] and ctx["seniority"] in SENIORITY_TO_JOB_LEVEL:
         job_levels = SENIORITY_TO_JOB_LEVEL[ctx["seniority"]]
         pinecone_filter = {"job_levels": {"$in": job_levels}}
 
-    # 3. Multimodal retrieval (Parallel)
+    # 3. Three-leg parallel retrieval (top_k=30 for larger fusion pool)
     loop = asyncio.get_running_loop()
-    
-    p_q_task = loop.run_in_executor(None, query_catalog, q_vector, 20, pinecone_filter)
-    p_h_task = loop.run_in_executor(None, query_catalog, hyde_vector, 20, pinecone_filter)
-    bm25_task = loop.run_in_executor(None, query_bm25, query_str, 20)
+    p_q_task    = loop.run_in_executor(None, query_catalog, q_vector,    30, pinecone_filter)
+    p_h_task    = loop.run_in_executor(None, query_catalog, hyde_vector, 30, pinecone_filter)
+    bm25_task   = loop.run_in_executor(None, query_bm25,    query_str,   20)  # k=20 matches Pinecone weight
     
     pinecone_q, pinecone_hyde, bm25_results = await asyncio.gather(p_q_task, p_h_task, bm25_task)
     
     # 4. Fuse with RRF
     fused = reciprocal_rank_fusion(pinecone_q, pinecone_hyde, bm25_results, top_n=30)
     
-    # 5. Fallback: If fused results are thin (<8) or missing seniority matches, 
-    # retry without filter to avoid missing good general tests
+    # 5. Fallback: retry without filter if fused results are thin
     if len(fused) < 8 and pinecone_filter:
-        p_no_filter = await loop.run_in_executor(None, query_catalog, hyde_vector, 20)
+        p_no_filter = await loop.run_in_executor(None, query_catalog, hyde_vector, 30)
         fused = reciprocal_rank_fusion(fused, p_no_filter, top_n=30)
 
-    # 6. Inject personality anchor (OPQ32r) if missing
-    opq_keywords = {"opq32r", "opq", "occupational personality"}
+    # 6. Post-RRF deterministic type filter (honor explicit test_type_hints)
+    if ctx.get("test_type_hints"):
+        hint_map = {
+            "cognitive": "A", "personality": "P", "technical": "K",
+            "simulation": "S", "situational": "B", "behavioral": "P",
+            "competencies": "C", "exercises": "E", "development": "D",
+        }
+        required_codes = {hint_map[h] for h in ctx["test_type_hints"] if h in hint_map}
+        if required_codes:
+            filtered = [i for i in fused if any(c in i.get("test_type", "") for c in required_codes)]
+            fused = filtered if len(filtered) >= 3 else fused  # fallback to unfiltered if over-constrained
+
+    # 7. OPQ32r anchor: direct catalog lookup — no embedding round-trip
+    opq_keywords = {"opq32r", "opq"}
     has_opq = any(
         any(kw in item["name"].lower() for kw in opq_keywords)
         for item in fused
     )
     if not has_opq:
-        opq_vec = await aembed_query("OPQ32r occupational personality questionnaire behavior")
-        opq_results = await loop.run_in_executor(None, query_catalog, opq_vec, 3)
-        fused = opq_results + fused
+        full_catalog = get_catalog()
+        opq = next((i for i in full_catalog if "opq32r" in i["name"].lower()), None)
+        if opq:
+            fused.insert(0, opq)
 
-    # 7. Inject any explicit_adds from context
+    # 8. Inject explicit_adds from context
     if ctx["explicit_adds"]:
         full_catalog = get_catalog()
         for add_name in ctx["explicit_adds"]:
@@ -399,7 +394,7 @@ async def retrieve_node(state: AgentState) -> AgentState:
                         fused.insert(0, item)
                     break
 
-    # Final dedup by URL
+    # 9. Final dedup by URL
     seen = set()
     final_unique = []
     for item in fused:
@@ -465,10 +460,40 @@ async def compare_node(state: AgentState) -> AgentState:
     last = _last_user_message(state["messages"])
     full_catalog = get_catalog()
 
+    # Common shorthand → canonical substring for catalog lookup
+    ALIASES = {
+        "opq":         "opq32r",
+        "verify g+":   "shl verify interactive",
+        "verify":      "shl verify",
+        "gsa":         "global skills assessment",
+        "gsma":        "global skills",
+        "sjt":         "situational judgment",
+        "mq":          "motivation questionnaire",
+    }
+
+    def _resolve(text: str) -> str:
+        lower = text.lower()
+        for alias, canonical in ALIASES.items():
+            if alias in lower:
+                lower = lower.replace(alias, canonical)
+        return lower
+
+    resolved_last = _resolve(last)
+
     mentioned = [
         item for item in full_catalog
-        if item["name"].lower() in last.lower()
+        if item["name"].lower() in resolved_last
+        or any(word in resolved_last for word in item["name"].lower().split() if len(word) > 3)
     ]
+    # deduplicate by url
+    seen_urls = set()
+    deduped = []
+    for item in mentioned:
+        if item["url"] not in seen_urls:
+            seen_urls.add(item["url"])
+            deduped.append(item)
+    mentioned = deduped[:8]  # cap to avoid bloating context
+
     if not mentioned:
         mentioned = state.get("retrieved_items", [])[:5]
 

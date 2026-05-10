@@ -72,7 +72,8 @@ Return ONLY valid JSON with these fields:
   "explicit_removes": ["assessments or skills user rejected"],
   "explicit_adds": ["assessments or skills user requested"],
   "languages": ["Spanish, Mandarin, etc."],
-  "industry": "banking, healthcare, retail, etc."
+  "industry": "banking, healthcare, retail, etc.",
+  "hyde_description": "If job_role is known: write a single paragraph describing an ideal SHL assessment for this role. Use SHL-style language: 'measures ability to...', 'designed for...', 'evaluates competency in...'. Include role, seniority, key skills, and preferred test types. If job_role is null: return null."
 }}
 
 Rules:

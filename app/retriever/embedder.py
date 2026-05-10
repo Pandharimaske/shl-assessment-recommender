@@ -1,68 +1,48 @@
 """
-Embedder — wraps Hugging Face Inference API for catalog and query embedding.
-Uses hosted API to save memory (no local PyTorch required).
+Embedder — local sentence-transformers model (all-MiniLM-L6-v2).
+No network call per request. Model loaded once at startup, offloaded to
+thread executor so the async event loop is never blocked.
 """
-from huggingface_hub import InferenceClient, AsyncInferenceClient
-from app.core.config import get_settings
+import asyncio
+from sentence_transformers import SentenceTransformer
 
-_client: InferenceClient | None = None
-_aclient: AsyncInferenceClient | None = None
+_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+_model: SentenceTransformer | None = None
 
-def _get_client() -> InferenceClient:
-    global _client
-    if _client is None:
-        settings = get_settings()
-        _client = InferenceClient(token=settings.hf_token)
-    return _client
 
-def _get_aclient() -> AsyncInferenceClient:
-    global _aclient
-    if _aclient is None:
-        settings = get_settings()
-        _aclient = AsyncInferenceClient(token=settings.hf_token)
-    return _aclient
+def _get_model() -> SentenceTransformer:
+    global _model
+    if _model is None:
+        _model = SentenceTransformer(_MODEL_NAME)
+    return _model
+
+
+def preload_model() -> None:
+    """Call at startup to avoid cold-start latency on the first request."""
+    _get_model()
+    print(f"Embedding model '{_MODEL_NAME}' loaded.")
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed catalog items (passages)."""
+    """Embed a batch of texts (CPU-bound, synchronous)."""
     if not texts:
         return []
-    
-    settings = get_settings()
-    client = _get_client()
-    
-    # feature_extraction natively handles list of texts and returns list of lists
-    response = client.feature_extraction(
-        texts,
-        model=settings.embed_model
-    )
-    # the InferenceClient returns a numpy array-like object (actually a list if it's parsed from JSON, or numpy if installed)
-    # usually it returns a numpy array, so we convert it to list of floats
-    if hasattr(response, "tolist"):
-        return response.tolist()
-    return response
+    model = _get_model()
+    embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+    return embeddings.tolist()
 
 
 def embed_query(text: str) -> list[float]:
-    """Embed user search queries."""
+    """Embed a single query string."""
     return embed_texts([text])[0]
 
 
 async def aembed_query(text: str) -> list[float]:
-    """Async embed user search queries."""
+    """Async embed — offloads CPU work to executor so event loop stays free."""
     if not text:
         return []
-    
-    settings = get_settings()
-    client = _get_aclient()
-    
-    response = await client.feature_extraction(
-        text,
-        model=settings.embed_model
-    )
-    if hasattr(response, "tolist"):
-        return response.tolist()
-    return response
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, embed_query, text)
 
 
 def build_catalog_text(item: dict) -> str:

@@ -24,9 +24,10 @@ class Settings(BaseSettings):
     pinecone_api_key: str
     pinecone_index: str = "shl-catalog"
 
-    # Embeddings (via HuggingFace Inference API)
+    # Embeddings — local model, no token required
+    # hf_token kept for backwards compat but no longer used for embeddings
     hf_token: str | None = None
-    embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"  # informational only
 
     # Agent behaviour
     max_turns: int = 8                  # hard cap from assignment

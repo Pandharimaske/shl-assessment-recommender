@@ -37,7 +37,7 @@ async def init_bm25_retriever():
         catalog = get_catalog()
         docs = _create_bm25_docs(catalog)
         _bm25 = BM25Retriever.from_documents(docs)
-        _bm25.k = 10
+        _bm25.k = 20   # matches Pinecone top_k for equal RRF weight
     return _bm25
 
 def get_bm25_retriever() -> BM25Retriever:
@@ -47,7 +47,7 @@ def get_bm25_retriever() -> BM25Retriever:
         catalog = get_catalog()
         docs = _create_bm25_docs(catalog)
         _bm25 = BM25Retriever.from_documents(docs)
-        _bm25.k = 10
+        _bm25.k = 20
         
     return _bm25
 

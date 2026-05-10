@@ -1,20 +1,24 @@
 """
 Pinecone client — upsert catalog embeddings and query at runtime.
 """
+import threading
 from pinecone import Pinecone, ServerlessSpec
 from app.core.config import get_settings
 
 
 _pc: Pinecone | None = None
 _index = None
+_init_lock = threading.Lock()  # prevents race condition on cold-start parallel requests
 
 
 def _get_index():
     global _pc, _index
     if _index is None:
-        settings = get_settings()
-        _pc = Pinecone(api_key=settings.pinecone_api_key)
-        _index = _pc.Index(settings.pinecone_index)
+        with _init_lock:           # double-checked locking
+            if _index is None:
+                settings = get_settings()
+                _pc = Pinecone(api_key=settings.pinecone_api_key)
+                _index = _pc.Index(settings.pinecone_index)
     return _index
 
 
