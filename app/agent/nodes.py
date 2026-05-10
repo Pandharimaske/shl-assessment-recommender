@@ -12,6 +12,7 @@ import re
 from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_mistralai import ChatMistralAI
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -33,9 +34,10 @@ from app.catalog.loader import get_catalog
 from app.core.config import get_settings
 
 
-# ── LLM singleton ─────────────────────────────────────────────────────────────
+# ── LLM singletons ─────────────────────────────────────────────────────────────
 
 _llm: BaseChatModel | None = None
+_small_llm: BaseChatModel | None = None
 
 def _get_llm() -> BaseChatModel:
     global _llm
@@ -50,69 +52,50 @@ def _get_llm() -> BaseChatModel:
         )
         
         fallbacks = []
-        
         if s.google_api_key:
-            fallbacks.append(ChatGoogleGenerativeAI(
-                model="gemini-1.5-flash",
-                google_api_key=s.google_api_key,
-                temperature=0.2,
-                max_tokens=1024,
-                max_retries=0,
-            ))
-
+            fallbacks.append(ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=s.google_api_key, temperature=0.2, max_retries=0))
+        if s.mistral_api_key:
+            fallbacks.append(ChatMistralAI(api_key=s.mistral_api_key, model="mistral-small-latest", temperature=0.2, max_retries=0))
         if s.openrouter_api_key:
-            # Primary OpenRouter model from .env
-            fallbacks.append(ChatOpenAI(
-                api_key=s.openrouter_api_key,
-                base_url="https://openrouter.ai/api/v1",
-                model=s.openrouter_model,
-                temperature=0.2,
-                max_tokens=1024,
-                max_retries=0,
-            ))
-            # Chain additional OpenRouter free models to soak up rate limits
-            for backup_model in [
-                "google/gemma-4-31b-it:free",
-                "qwen/qwen3-next-80b-a3b-instruct:free",
-                "openai/gpt-oss-120b:free",
-                "qwen/qwen3-coder:free",
-                "meta-llama/llama-3.3-70b-instruct:free"
-            ]:
-                if backup_model != s.openrouter_model:
-                    fallbacks.append(ChatOpenAI(
-                        api_key=s.openrouter_api_key,
-                        base_url="https://openrouter.ai/api/v1",
-                        model=backup_model,
-                        temperature=0.2,
-                        max_tokens=1024,
-                        max_retries=0,
-                    ))
+            fallbacks.append(ChatOpenAI(api_key=s.openrouter_api_key, base_url="https://openrouter.ai/api/v1", model=s.openrouter_model, temperature=0.2, max_retries=0))
+            for backup in ["google/gemma-4-31b-it:free", "qwen/qwen3-next-80b-a3b-instruct:free"]:
+                fallbacks.append(ChatOpenAI(api_key=s.openrouter_api_key, base_url="https://openrouter.ai/api/v1", model=backup, temperature=0.2, max_retries=0))
 
-        if fallbacks:
-            print(f"DEBUG: LLM INITIALIZED WITH {len(fallbacks)} FALLBACKS")
-            _llm = primary_llm.with_fallbacks(fallbacks)
-        else:
-            print("DEBUG: LLM INITIALIZED WITH NO FALLBACKS")
-            _llm = primary_llm
-            
+        _llm = primary_llm.with_fallbacks(fallbacks) if fallbacks else primary_llm
     return _llm
 
-async def _acall_llm(system: str, user_content: str) -> str:
-    llm = _get_llm()
-    resp = await llm.ainvoke([
-        SystemMessage(content=system),
-        HumanMessage(content=user_content),
-    ])
+def _get_small_llm() -> BaseChatModel:
+    global _small_llm
+    if _small_llm is None:
+        s = get_settings()
+        primary_llm = ChatGroq(
+            api_key=s.groq_api_key,
+            model=s.groq_small_model,
+            temperature=0.2,
+            max_tokens=1024,
+            max_retries=0,
+        )
+        
+        fallbacks = []
+        if s.google_api_key:
+            fallbacks.append(ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=s.google_api_key, temperature=0.2, max_retries=0))
+        if s.mistral_api_key:
+            fallbacks.append(ChatMistralAI(api_key=s.mistral_api_key, model="mistral-small-latest", temperature=0.2, max_retries=0))
+        if s.openrouter_api_key:
+            fallbacks.append(ChatOpenAI(api_key=s.openrouter_api_key, base_url="https://openrouter.ai/api/v1", model="google/gemma-4-31b-it:free", temperature=0.2, max_retries=0))
+
+        _small_llm = primary_llm.with_fallbacks(fallbacks) if fallbacks else primary_llm
+    return _small_llm
+
+async def _acall_llm(system: str, user_content: str, use_small: bool = False) -> str:
+    llm = _get_small_llm() if use_small else _get_llm()
+    resp = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user_content)])
     return resp.content.strip()
 
-async def _acall_llm_structured(system: str, user_content: str, schema: type) -> any:
-    llm = _get_llm()
-    # Use with_structured_output to bind the Pydantic schema
+async def _acall_llm_structured(system: str, user_content: str, schema: type, use_small: bool = False) -> any:
+    llm = _get_small_llm() if use_small else _get_llm()
     structured_llm = llm.with_structured_output(schema)
-    return await structured_llm.ainvoke([
-        SystemMessage(content=system),
-        HumanMessage(content=user_content),
-    ])
+    return await structured_llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user_content)])
 
 # ── Conversation utilities ────────────────────────────────────────────────────
 
@@ -324,7 +307,8 @@ async def clarify_node(state: AgentState) -> AgentState:
     missing = state.get("missing_fields", ["job_role"])
     prompt = CLARIFY_PROMPT.format(missing_fields=", ".join(missing))
     question = await _acall_llm(SYSTEM_PROMPT + "\n\n" + prompt,
-                                _conversation_text(state["messages"]))
+                                _conversation_text(state["messages"]),
+                                use_small=True)
     state["reply"] = question
     state["recommendations"] = []
     state["end_of_conversation"] = False
@@ -504,7 +488,7 @@ async def compare_node(state: AgentState) -> AgentState:
 # ── Node 7: Refuse ────────────────────────────────────────────────────────────
 
 async def refuse_node(state: AgentState) -> AgentState:
-    parsed: SimpleOutput = await _acall_llm_structured(SYSTEM_PROMPT, REFUSE_PROMPT, SimpleOutput)
+    parsed: SimpleOutput = await _acall_llm_structured(SYSTEM_PROMPT, REFUSE_PROMPT, SimpleOutput, use_small=True)
     state["reply"] = parsed.reply
     state["recommendations"] = []
     state["end_of_conversation"] = False

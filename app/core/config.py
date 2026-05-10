@@ -14,9 +14,11 @@ class Settings(BaseSettings):
     # LLM
     groq_api_key: str
     groq_model: str = "llama-3.3-70b-versatile"
+    groq_small_model: str = "llama-3.1-8b-instant"
     openrouter_api_key: str | None = None
     openrouter_model: str = "meta-llama/llama-3.3-70b-instruct"
     google_api_key: str | None = None
+    mistral_api_key: str | None = None
 
     # Pinecone
     pinecone_api_key: str
