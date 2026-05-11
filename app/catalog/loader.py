@@ -7,7 +7,7 @@ from typing import Optional
 
 CATALOG_PATH = Path(__file__).parent / "shl_product_catalog.json"
 
-# SHL keys → single-letter test_type codes (from official catalog)
+
 KEYS_TO_TYPE: dict[str, str] = {
     "Ability & Aptitude":           "A",
     "Biodata & Situational Judgment": "B",
@@ -65,7 +65,7 @@ def load_catalog() -> list[dict]:
     return catalog
 
 
-# Module-level singleton (loaded once at startup)
+
 _CATALOG: Optional[list[dict]] = None
 
 

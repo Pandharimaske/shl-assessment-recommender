@@ -18,7 +18,6 @@ def _chat(messages: list[dict]) -> dict:
     return r.json()
 
 
-# ── Probe 1: Agent does NOT recommend on Turn 1 for vague query ───────────────
 
 def test_no_recommendation_on_vague_turn1():
     resp = _chat([{"role": "user", "content": "I need an assessment"}])
@@ -27,7 +26,6 @@ def test_no_recommendation_on_vague_turn1():
     )
 
 
-# ── Probe 2: Agent clarifies with a question on vague query ───────────────────
 
 def test_clarifies_with_question_on_vague():
     resp = _chat([{"role": "user", "content": "I need an assessment"}])
@@ -36,7 +34,6 @@ def test_clarifies_with_question_on_vague():
     )
 
 
-# ── Probe 3: Agent DOES recommend when enough context given ───────────────────
 
 def test_recommends_when_context_sufficient():
     resp = _chat([{
@@ -51,7 +48,6 @@ def test_recommends_when_context_sufficient():
     )
 
 
-# ── Probe 4: Agent recommends with JD on Turn 1 ──────────────────────────────
 
 def test_recommends_on_turn1_with_full_jd():
     resp = _chat([{
@@ -67,7 +63,6 @@ def test_recommends_on_turn1_with_full_jd():
     )
 
 
-# ── Probe 5: Refuses off-topic requests ──────────────────────────────────────
 
 def test_refuses_off_topic():
     resp = _chat([{
@@ -82,7 +77,6 @@ def test_refuses_off_topic():
     )
 
 
-# ── Probe 6: Refuses prompt injection ────────────────────────────────────────
 
 def test_refuses_prompt_injection():
     resp = _chat([{
@@ -92,7 +86,6 @@ def test_refuses_prompt_injection():
     assert resp["recommendations"] == []
 
 
-# ── Probe 7: Honors mid-conversation refinement ──────────────────────────────
 
 def test_honors_refinement_add():
     """Adding a constraint updates the shortlist, doesn't restart."""
@@ -107,17 +100,14 @@ def test_honors_refinement_add():
         {"role": "user", "content": "Actually, also add a personality test to the shortlist"},
     ])
 
-    # After adding personality, should still have recommendations
     assert len(turn2["recommendations"]) >= 1
 
-    # Should include a personality type (P)
     types = [r["test_type"] for r in turn2["recommendations"]]
     assert any("P" in t for t in types), (
         "After asking for personality tests, at least one P-type should appear"
     )
 
 
-# ── Probe 8: No hallucinated URLs ────────────────────────────────────────────
 
 def test_no_hallucinated_urls():
     from app.catalog.loader import get_catalog
@@ -134,14 +124,11 @@ def test_no_hallucinated_urls():
         )
 
 
-# ── Probe 9: Turn cap is honored ─────────────────────────────────────────────
 
 def test_recommends_by_turn_6():
     """Agent must commit to a recommendation by turn 6 at the latest."""
     messages = []
     replies = []
-
-    # Simulate 6 user turns of back-and-forth
     conversations = [
         "I need some assessments",
         "We're in the tech industry",
@@ -158,13 +145,12 @@ def test_recommends_by_turn_6():
         resp = _chat(messages)
         replies.append(resp["reply"])
 
-        if i == 5:  # Turn 6 (0-indexed)
+        if i == 5:
             assert len(resp["recommendations"]) >= 1, (
                 "Agent must recommend by turn 6"
             )
 
 
-# ── Probe 10: end_of_conversation triggers on confirmation ───────────────────
 
 def test_eoc_on_confirmation():
     resp = _chat([

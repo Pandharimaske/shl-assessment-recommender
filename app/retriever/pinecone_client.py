@@ -8,13 +8,13 @@ from app.core.config import get_settings
 
 _pc: Pinecone | None = None
 _index = None
-_init_lock = threading.Lock()  # prevents race condition on cold-start parallel requests
+_init_lock = threading.Lock()
 
 
 def _get_index():
     global _pc, _index
     if _index is None:
-        with _init_lock:           # double-checked locking
+        with _init_lock:
             if _index is None:
                 settings = get_settings()
                 _pc = Pinecone(api_key=settings.pinecone_api_key)
@@ -28,7 +28,6 @@ def upsert_catalog(vectors: list[dict]):
     metadata must include: name, url, test_type, description, job_levels, duration
     """
     index = _get_index()
-    # Pinecone upsert in batches of 100
     batch_size = 100
     for i in range(0, len(vectors), batch_size):
         index.upsert(vectors=vectors[i : i + batch_size])

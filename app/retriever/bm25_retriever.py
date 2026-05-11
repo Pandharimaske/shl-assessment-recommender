@@ -37,7 +37,7 @@ async def init_bm25_retriever():
         catalog = get_catalog()
         docs = _create_bm25_docs(catalog)
         _bm25 = BM25Retriever.from_documents(docs)
-        _bm25.k = 20   # matches Pinecone top_k for equal RRF weight
+        _bm25.k = 20
     return _bm25
 
 def get_bm25_retriever() -> BM25Retriever:
@@ -60,7 +60,7 @@ def query_bm25(query: str, k: int = 10) -> list[dict]:
     return [
         {
             "id": d.metadata["id"],
-            "score": 1.0, # BM25Retriever doesn't return scores easily in invoke
+            "score": 1.0,
             "name": d.metadata["name"],
             "url": d.metadata["url"],
             "test_type": d.metadata["test_type"],

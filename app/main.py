@@ -24,7 +24,6 @@ from app.agent.graph import get_graph
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ── Startup ──────────────────────────────────────────────────────────────
     loop = asyncio.get_event_loop()
 
     print("Loading SHL catalog...")
@@ -52,7 +51,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # ── Shutdown ─────────────────────────────────────────────────────────────
     print("Shutting down.")
 
 
@@ -63,7 +61,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Allow cross-origin requests (for any frontend or evaluator)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -71,5 +68,4 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register routes
 app.include_router(router)

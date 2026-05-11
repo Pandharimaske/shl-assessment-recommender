@@ -2,10 +2,8 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 class AnalyzeOutput(BaseModel):
-    # Safety and flow
     verdict: str = Field(..., description="ALLOWED (continue), BLOCKED (unrelated/safety), or EOC (finalize shortlist)")
     
-    # Intent extraction
     job_role: Optional[str] = Field(None, description="The role being hired for")
     seniority: Optional[str] = Field(None, description="Seniority level")
     skills: List[str] = Field(default_factory=list, description="Specific skills mentioned")

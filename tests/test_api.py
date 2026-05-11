@@ -11,7 +11,6 @@ from app.main import app
 client = TestClient(app)
 
 
-# ── /health ──────────────────────────────────────────────────────────────────
 
 def test_health_returns_200():
     r = client.get("/health")
@@ -23,7 +22,6 @@ def test_health_returns_ok():
     assert r.json() == {"status": "ok"}
 
 
-# ── /chat — schema compliance ─────────────────────────────────────────────────
 
 def _chat(messages: list[dict]) -> dict:
     r = client.post("/chat", json={"messages": messages})

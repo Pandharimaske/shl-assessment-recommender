@@ -14,9 +14,6 @@ import httpx
 
 API_URL = "http://localhost:8000"
 
-# ── Ground truth shortlists extracted from sample conversations ───────────────
-# Format: {trace_id: [expected_assessment_names]}
-# Extracted from C1-C10 sample conversations.
 
 GROUND_TRUTH: dict[str, list[str]] = {
     "C1": [
@@ -84,7 +81,6 @@ def recall_at_k(recommended: list[str], relevant: list[str], k: int = 10) -> flo
     if not relevant:
         return 1.0
     top_k = recommended[:k]
-    # Case-insensitive name matching
     top_k_lower = [n.lower() for n in top_k]
     hits = sum(1 for r in relevant if r.lower() in top_k_lower)
     return hits / len(relevant)
@@ -95,7 +91,6 @@ def simulate_conversation(trace_id: str) -> list[str]:
     Run a simple 2-turn conversation for each trace and collect recommended names.
     (In real evaluation, the harness runs a full multi-turn conversation.)
     """
-    # Simple role prompts per trace
     prompts = {
         "C1": "I need to assess a mid-level Java backend developer who collaborates with stakeholders.",
         "C2": "I'm hiring a senior Linux systems engineer with networking skills.",

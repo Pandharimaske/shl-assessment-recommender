@@ -11,7 +11,7 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-    # LLM
+
     groq_api_key: str
     groq_model: str = "llama-3.3-70b-versatile"
     groq_small_model: str = "llama-3.1-8b-instant"
@@ -20,18 +20,16 @@ class Settings(BaseSettings):
     google_api_key: str | None = None
     mistral_api_key: str | None = None
 
-    # Pinecone
+
     pinecone_api_key: str
     pinecone_index: str = "shl-catalog"
 
-    # Embeddings — local model, no token required
-    # hf_token kept for backwards compat but no longer used for embeddings
     hf_token: str | None = None
-    embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"  # informational only
+    embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
-    # Agent behaviour
-    max_turns: int = 8                  # hard cap from assignment
-    min_context_for_recommendation: int = 2   # turns before agent can recommend
+
+    max_turns: int = 8
+    min_context_for_recommendation: int = 2
 
 
 _settings: Settings | None = None

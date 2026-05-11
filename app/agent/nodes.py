@@ -33,7 +33,6 @@ from app.catalog.loader import get_catalog
 from app.core.config import get_settings
 
 
-# ── LLM singletons ─────────────────────────────────────────────────────────────
 
 _llm: BaseChatModel | None = None
 _small_llm: BaseChatModel | None = None
@@ -46,7 +45,7 @@ def _get_llm() -> BaseChatModel:
             api_key=s.groq_api_key,
             model=s.groq_model,
             temperature=0.2,
-            max_tokens=2048,   # rerank needs up to 10 URLs + explanation
+            max_tokens=2048,
             max_retries=0,
         )
         
@@ -58,8 +57,7 @@ def _get_llm() -> BaseChatModel:
         if s.openrouter_api_key:
             fallbacks.append(ChatOpenAI(api_key=s.openrouter_api_key, base_url="https://openrouter.ai/api/v1", model=s.openrouter_model, temperature=0.2, max_retries=0))
             for backup in ["google/gemma-4-31b-it:free", "qwen/qwen3-next-80b-a3b-instruct:free"]:
-                # last-resort fallbacks get 1 retry to handle transient 503s
-                fallbacks.append(ChatOpenAI(api_key=s.openrouter_api_key, base_url="https://openrouter.ai/api/v1", model=backup, temperature=0.2, max_retries=1))
+                    fallbacks.append(ChatOpenAI(api_key=s.openrouter_api_key, base_url="https://openrouter.ai/api/v1", model=backup, temperature=0.2, max_retries=1))
 
         _llm = primary_llm.with_fallbacks(fallbacks) if fallbacks else primary_llm
     return _llm
@@ -72,7 +70,7 @@ def _get_small_llm() -> BaseChatModel:
             api_key=s.groq_api_key,
             model=s.groq_small_model,
             temperature=0.2,
-            max_tokens=512,    # clarify/refuse only need short outputs
+            max_tokens=512,
             max_retries=0,
         )
         
@@ -97,7 +95,6 @@ async def _acall_llm_structured(system: str, user_content: str, schema: type, us
     structured_llm = llm.with_structured_output(schema)
     return await structured_llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user_content)])
 
-# ── Conversation utilities ────────────────────────────────────────────────────
 
 def _conversation_text(messages: list[dict]) -> str:
     return "\n".join(
@@ -111,20 +108,16 @@ def _last_user_message(messages: list[dict]) -> str:
     return ""
 
 def _extract_previous_recommendations(messages: list[dict]) -> list[dict]:
-    """Fallback: if the API payload lacks previous_recommendations, extract them from the assistant's last message URLs."""
     for m in reversed(messages):
         if m["role"] == "assistant":
-            # Extract standard SHL catalog URLs from markdown/text (optional trailing slash)
             urls = re.findall(r"https://www.shl.com/products/product-catalog/view/[a-z0-9-]+/?", m["content"])
             if urls:
                 catalog = get_catalog()
                 recs = []
                 for url in urls:
-                    # Normalize URL to always have a trailing slash for matching
                     url = url if url.endswith('/') else url + '/'
                     for item in catalog:
                         if item["url"] == url:
-                            # Avoid duplicates
                             if not any(r["url"] == url for r in recs):
                                 recs.append({
                                     "name": item["name"],
@@ -136,8 +129,6 @@ def _extract_previous_recommendations(messages: list[dict]) -> list[dict]:
                     return recs
     return []
 
-
-# ── Extraction + Logic ────────────────────────────────────────────────────────
 
 
 def _confidence_score(ctx: dict) -> tuple[int, list[str]]:
@@ -158,9 +149,9 @@ def _confidence_score(ctx: dict) -> tuple[int, list[str]]:
 
     if not ctx["job_role"]:
         missing.append("job_role")
-        return 0, missing          # can't do anything without a role
+        return 0, missing
 
-    score = 1  # has role
+    score = 1
 
     if ctx["seniority"]:
         score += 1
@@ -187,7 +178,7 @@ def _build_search_query(ctx: dict) -> str:
     if ctx["seniority"]:
         parts.append(ctx["seniority"])
     if ctx["skills"]:
-        parts.extend(ctx["skills"][:5])          # cap to avoid noise
+        parts.extend(ctx["skills"][:5])
     if ctx["test_type_hints"]:
         parts.extend(ctx["test_type_hints"])
     if ctx["industry"]:
@@ -213,7 +204,6 @@ def _context_summary(ctx: dict) -> str:
     return "\n".join(lines)
 
 
-# ── Catalog context formatter ─────────────────────────────────────────────────
 
 def _catalog_context(items: list[dict], max_items: int = 20) -> str:
     lines = []
@@ -229,7 +219,6 @@ def _catalog_context(items: list[dict], max_items: int = 20) -> str:
     return "\n\n".join(lines)
 
 
-# ── Node 1: Supervisor (Unified Guard + Intent) ───────────────────────────────
 
 async def supervisor_node(state: AgentState) -> AgentState:
     """
@@ -239,16 +228,13 @@ async def supervisor_node(state: AgentState) -> AgentState:
     turn_count = sum(1 for m in state["messages"] if m["role"] == "user")
     state["turn_count"] = turn_count
 
-    # 1. Fast-track heuristics (no LLM needed)
-    if turn_count >= 6:
+    if turn_count >= 4:
         state["intent"] = "force_recommend"
-        # We still need context for retrieval, so we continue to LLM call below
     
     last_msg = _last_user_message(state["messages"]).lower()
     compare_signals = ["difference between", "compare", "vs ", "versus", "which is better", "what is the difference"]
     is_compare = any(s in last_msg for s in compare_signals)
 
-    # 2. LLM Analysis (Safety + Context)
     conversation = _conversation_text(state["messages"])
     prompt = ANALYZE_PROMPT.format(conversation=conversation)
     
@@ -258,13 +244,11 @@ async def supervisor_node(state: AgentState) -> AgentState:
         AnalyzeOutput
     )
     
-    # Hydrate HyDE: now generated inline by the LLM in AnalyzeOutput.
-    # If it came back null (e.g. no job_role yet), leave it null — retrieve_node will skip it.
+    # Hydrate HyDE
     ctx = analysis.model_dump()
     state["conversation_context"] = ctx
     verdict = ctx["verdict"].upper()
 
-    # 3. Routing Logic
     if "BLOCKED" in verdict:
         state["intent"] = "refuse"
     elif "EOC" in verdict:
@@ -275,14 +259,13 @@ async def supervisor_node(state: AgentState) -> AgentState:
             state["end_of_conversation"] = True
             state["intent"] = "eoc"
         else:
-            # If user says "thanks/done" but we have no recs, treat as ALLOWED/pending
             state["intent"] = "pending"
     else:
         # ALLOWED path
         if is_compare:
             state["intent"] = "compare"
         elif state["intent"] == "force_recommend":
-            pass # already set
+            pass
         else:
             score, missing = _confidence_score(ctx)
             if score < 2:
@@ -294,7 +277,6 @@ async def supervisor_node(state: AgentState) -> AgentState:
     return state
 
 
-# ── Node 3: Clarify ───────────────────────────────────────────────────────────
 
 async def clarify_node(state: AgentState) -> AgentState:
     """Ask exactly one targeted question based on what's missing."""
@@ -309,7 +291,6 @@ async def clarify_node(state: AgentState) -> AgentState:
     return state
 
 
-# ── Node 4: Retrieve ──────────────────────────────────────────────────────────
 
 async def retrieve_node(state: AgentState) -> AgentState:
     """
@@ -326,41 +307,33 @@ async def retrieve_node(state: AgentState) -> AgentState:
         state = await supervisor_node(state)
         ctx = state["conversation_context"]
 
-    # Build structured query
     query_str = _build_search_query(ctx)
     
-    # HyDE description generated inline by supervisor — use directly, no extra LLM call
     hyde_desc = ctx.get("hyde_description") or query_str
 
-    # 1. Embed both query and HyDE in parallel
     q_vector, hyde_vector = await asyncio.gather(
         aembed_query(query_str),
         aembed_query(hyde_desc),
     )
     
-    # 2. Metadata filter by seniority
     pinecone_filter = None
     if ctx["seniority"] and ctx["seniority"] in SENIORITY_TO_JOB_LEVEL:
         job_levels = SENIORITY_TO_JOB_LEVEL[ctx["seniority"]]
         pinecone_filter = {"job_levels": {"$in": job_levels}}
 
-    # 3. Three-leg parallel retrieval (top_k=30 for larger fusion pool)
     loop = asyncio.get_running_loop()
     p_q_task    = loop.run_in_executor(None, query_catalog, q_vector,    30, pinecone_filter)
     p_h_task    = loop.run_in_executor(None, query_catalog, hyde_vector, 30, pinecone_filter)
-    bm25_task   = loop.run_in_executor(None, query_bm25,    query_str,   20)  # k=20 matches Pinecone weight
+    bm25_task   = loop.run_in_executor(None, query_bm25,    query_str,   20)
     
     pinecone_q, pinecone_hyde, bm25_results = await asyncio.gather(p_q_task, p_h_task, bm25_task)
     
-    # 4. Fuse with RRF
     fused = reciprocal_rank_fusion(pinecone_q, pinecone_hyde, bm25_results, top_n=30)
     
-    # 5. Fallback: retry without filter if fused results are thin
     if len(fused) < 8 and pinecone_filter:
         p_no_filter = await loop.run_in_executor(None, query_catalog, hyde_vector, 30)
         fused = reciprocal_rank_fusion(fused, p_no_filter, top_n=30)
 
-    # 6. Post-RRF deterministic type filter (honor explicit test_type_hints)
     if ctx.get("test_type_hints"):
         hint_map = {
             "cognitive": "A", "personality": "P", "technical": "K",
@@ -370,9 +343,8 @@ async def retrieve_node(state: AgentState) -> AgentState:
         required_codes = {hint_map[h] for h in ctx["test_type_hints"] if h in hint_map}
         if required_codes:
             filtered = [i for i in fused if any(c in i.get("test_type", "") for c in required_codes)]
-            fused = filtered if len(filtered) >= 3 else fused  # fallback to unfiltered if over-constrained
+            fused = filtered if len(filtered) >= 3 else fused
 
-    # 7. OPQ32r anchor: direct catalog lookup — no embedding round-trip
     opq_keywords = {"opq32r", "opq"}
     has_opq = any(
         any(kw in item["name"].lower() for kw in opq_keywords)
@@ -384,7 +356,6 @@ async def retrieve_node(state: AgentState) -> AgentState:
         if opq:
             fused.insert(0, opq)
 
-    # 8. Inject explicit_adds from context
     if ctx["explicit_adds"]:
         full_catalog = get_catalog()
         for add_name in ctx["explicit_adds"]:
@@ -394,7 +365,6 @@ async def retrieve_node(state: AgentState) -> AgentState:
                         fused.insert(0, item)
                     break
 
-    # 9. Final dedup by URL
     seen = set()
     final_unique = []
     for item in fused:
@@ -407,7 +377,6 @@ async def retrieve_node(state: AgentState) -> AgentState:
     return state
 
 
-# ── Node 5: Recommend (LLM reranker) ─────────────────────────────────────────
 
 async def recommend_node(state: AgentState) -> AgentState:
     """
@@ -454,13 +423,11 @@ async def recommend_node(state: AgentState) -> AgentState:
     return state
 
 
-# ── Node 6: Compare ───────────────────────────────────────────────────────────
 
 async def compare_node(state: AgentState) -> AgentState:
     last = _last_user_message(state["messages"])
     full_catalog = get_catalog()
 
-    # Common shorthand → canonical substring for catalog lookup
     ALIASES = {
         "opq":         "opq32r",
         "verify g+":   "shl verify interactive",
@@ -492,7 +459,7 @@ async def compare_node(state: AgentState) -> AgentState:
         if item["url"] not in seen_urls:
             seen_urls.add(item["url"])
             deduped.append(item)
-    mentioned = deduped[:8]  # cap to avoid bloating context
+    mentioned = deduped[:8]
 
     if not mentioned:
         mentioned = state.get("retrieved_items", [])[:5]
@@ -510,7 +477,6 @@ async def compare_node(state: AgentState) -> AgentState:
     return state
 
 
-# ── Node 7: Refuse ────────────────────────────────────────────────────────────
 
 async def refuse_node(state: AgentState) -> AgentState:
     parsed: SimpleOutput = await _acall_llm_structured(SYSTEM_PROMPT, REFUSE_PROMPT, SimpleOutput, use_small=True)

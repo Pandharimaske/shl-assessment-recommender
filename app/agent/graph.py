@@ -39,7 +39,6 @@ def route_after_supervisor(state: AgentState) -> str:
     return "clarify"
 
 
-# ── Build graph ───────────────────────────────────────────────────────────────
 
 def build_graph():
     graph = StateGraph(AgentState)
@@ -82,7 +81,6 @@ def get_graph():
     return _graph
 
 
-# ── Public entry point ────────────────────────────────────────────────────────
 
 def _get_timeout_fallback(catalog) -> list[dict]:
     """Safe shortlist returned when agent times out — broad assessments that fit most roles."""

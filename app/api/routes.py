@@ -20,10 +20,8 @@ async def chat(request: ChatRequest):
     Stateless chat endpoint.
     Receives full conversation history, returns next agent reply + recommendations.
     """
-    # Convert Pydantic Message objects to plain dicts for the agent
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
-    # Basic sanity check — last message must be from user
     if not messages or messages[-1]["role"] != "user":
         raise HTTPException(
             status_code=422,
@@ -35,14 +33,12 @@ async def chat(request: ChatRequest):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        # Never crash — return a graceful fallback
         return ChatResponse(
             reply="I encountered an issue. Could you rephrase your request?",
             recommendations=[],
             end_of_conversation=False,
         )
 
-    # Build typed recommendation list
     recs = [
         Recommendation(
             name=r["name"],
